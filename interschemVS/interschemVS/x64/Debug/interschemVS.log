@@ -1,0 +1,7 @@
+﻿  main.cpp
+E:\PROGRAMMING\[UAIC] IP\interschem\interschemVS\main.cpp(432,21): warning C4267: '=': conversion from 'size_t' to 'int', possible loss of data
+E:\PROGRAMMING\[UAIC] IP\interschem\interschemVS\main.cpp(484,9): warning C4267: 'initializing': conversion from 'size_t' to 'int', possible loss of data
+E:\PROGRAMMING\[UAIC] IP\interschem\interschemVS\main.cpp(582,8): warning C4805: '==': unsafe mix of type 'double' and type 'bool' in operation
+E:\PROGRAMMING\[UAIC] IP\interschem\interschemVS\main.cpp(608,16): warning C4244: 'initializing': conversion from 'std::streamoff' to 'int', possible loss of data
+E:\PROGRAMMING\[UAIC] IP\interschem\interschemVS\main.cpp(79,1): warning C4715: 'prioritate': not all control paths return a value
+  interschemVS.vcxproj -> E:\PROGRAMMING\[UAIC] IP\interschem\interschemVS\x64\Debug\interschemVS.exe
