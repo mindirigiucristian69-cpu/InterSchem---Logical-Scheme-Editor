@@ -1,0 +1,6 @@
+﻿  main.cxx
+C:\Users\Cristi\Documents\BGI2010\bgi\main.cxx(1322,10): warning C4244: 'initializing': conversion from 'float' to 'int', possible loss of data
+C:\Users\Cristi\Documents\BGI2010\bgi\main.cxx(1323,10): warning C4244: 'initializing': conversion from 'float' to 'int', possible loss of data
+C:\Users\Cristi\Documents\BGI2010\bgi\main.cxx(1947,12): warning C4244: 'initializing': conversion from 'float' to 'int', possible loss of data
+C:\Users\Cristi\Documents\BGI2010\bgi\main.cxx(1948,12): warning C4244: 'initializing': conversion from 'float' to 'int', possible loss of data
+  bgi.vcxproj -> C:\Users\Cristi\Documents\BGI2010\bgi\Debug\bgi.exe
