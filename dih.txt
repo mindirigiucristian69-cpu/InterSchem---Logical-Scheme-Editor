@@ -1,0 +1,1548 @@
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <stack>
+#include <string>
+#include <cmath>
+#include <climits>
+#include <sstream>
+#include "graphics.h"
+#include "winbgim.h"
+
+using namespace std;
+
+#define NMAX 100005
+#define PI 3.1415926
+#define INF INT_MAX
+#define EPSILON 0.0001
+
+enum TipBloc
+{
+	TIP_START = 0,
+	TIP_ATRIBUIRE,
+	TIP_CITIRE,
+	TIP_DECIZIE,
+	TIP_AFISARE,
+	TIP_STOP
+};
+
+struct Bloc
+{
+	int x, y;
+	int tip;
+	char text[50];
+};
+
+struct Legatura
+{
+	int sursaIdx;
+	int destIdx;
+};
+
+struct blocLogic
+{
+	int id = 0;	 // id unic
+	int tip = 0; // mai jos
+	/**
+	0 stop
+	1 start
+	2 cin
+	3 cout
+	4 atribuire
+	5 if
+	**/
+	double valoare = 0.0;	 // val pt cin/rezultatul if ului
+	string expresie = ""; // expresia din cin/if
+	char var = '\0';		 // variabila unde retinem rezultatul
+	blocLogic* urm = NULL;	 // pt rulare din consola
+	blocLogic* urmA = NULL; // pt if daca e adv expresia
+	blocLogic* urmF = NULL; // pt if daca e falsa expresia
+	int guiIndex = 0;	 // pentru culoarea verde
+};
+
+vector<Bloc> schema;
+vector<Legatura> legaturi;
+vector<string> outputConsole;
+vector<string> cppCodeLines; // salvam liniile de cod undeva pentru afisare
+int scrollPosCod = 0;       // pozitia de scroll pentru codificare in c++
+
+bool esteMeniulDeschis = false;
+int indexBlocSelectat = -1;
+int indexSursaLegatura = -1;
+int offsetX, offsetY;
+int blocCurentExecutie = -1;
+
+double variabila[26]; // A-Z
+stack<char> operatori;
+stack<double> operanzi;
+
+char operatiiBinare[] = "+-*/^<>=#";
+char operatiiUnare[] = "scarel~";
+char operatii[] = "+-*/^<>=#scarel~";
+
+// declarari anticipate!?!?
+void DeseneazaInterfata();
+void AdaugaLog(string text);
+
+//////////////////////////////////////////////////////////////////////////////////// eval expresiei
+
+int prioritate(char ch)
+{
+	if (ch == '(' || ch == ')')
+		return 0;
+	if (ch == '+' || ch == '-')
+		return 1;
+	if (ch == '*' || ch == '/')
+		return 2;
+	if (ch == '^')
+		return 3;
+	if (ch == '=' || ch == '#' || ch == '<' || ch == '>')
+		return 4;
+	if (ch == 'c' || ch == 's' || ch == 'l' || ch == 'e' || ch == 't' || ch == 'a' || ch == 'r' || ch == '~')
+		return 5;
+	return -1;
+}
+
+bool difInf(double x)
+{
+	return fabs(INF - fabs(x)) > INF / 2.0;
+}
+double logaritm(double x)
+{
+	if (x < 0)
+		return -INF;
+
+	if (x > EPSILON && difInf(x))
+		return log(x);
+
+	return INF;
+}
+double exponential(double x)
+{
+	if (difInf(x))
+		return exp(x);
+
+	return INF;
+}
+double inmultire(double x, double y)
+{
+	if (fabs(x) < EPSILON || fabs(y) < EPSILON)
+		return 0;
+
+	if (difInf(x) && difInf(y))
+		return x * y;
+
+	return INF;
+}
+double putere(double x, double y)
+{
+	if (x == 0)
+		return 0;
+
+	if (y == 0)
+		return 1;
+
+	if (x == INF || y == INF)
+		return INF;
+
+	return pow(x, y);
+}
+double egalitate(double x, double y)
+{
+	return (fabs(x - y) < EPSILON);
+}
+double maiMic(double x, double y)
+{
+	return x < y;
+}
+double maiMare(double x, double y)
+{
+	return x > y;
+}
+double adunare(double x, double y)
+{
+	if (difInf(x) && difInf(y))
+		return x + y;
+
+	return INF;
+}
+double scadere(double x, double y)
+{
+	if (difInf(x) && difInf(y))
+		return x - y;
+
+	return INF;
+}
+double impartire(double x, double y)
+{
+	if (fabs(y) > EPSILON)
+		return x / y;
+
+	return INF;
+}
+double sinus(double x)
+{
+	if (difInf(x))
+	{
+		double radiani = x * PI / 180.0;
+		double rez = sin(radiani);
+		return (fabs(rez) < EPSILON) ? 0 : rez;
+	}
+	return INF;
+}
+double cosinus(double x)
+{
+	if (difInf(x))
+	{
+		double radiani = x * PI / 180.0;
+		double rez = cos(radiani);
+		return (fabs(rez) < EPSILON) ? 0 : rez;
+	}
+	return INF;
+}
+double modul(double x)
+{
+	if (difInf(x))
+		return fabs(x);
+	else
+		return INF;
+}
+double radical(double x)
+{
+	if (x < 0)
+		return -INF;
+	else if (difInf(x) && (x > -EPSILON))
+		return sqrt(fabs(x));
+	else
+		return INF;
+}
+
+bool esteNumar(string sir)
+{
+	if (sir.empty())
+		return false;
+	// It's a number if the first char is a digit
+	if (isdigit(sir[0]))
+		return true;
+	// Or if it's a negative number (minus followed by digit)
+	if (sir[0] == '-' && sir.length() > 1 && isdigit(sir[1]))
+		return true;
+	return false;
+}
+
+struct functie
+{
+	string expresie = "";
+	vector<string> v = vector <string>();
+	bool valid = 1;
+};
+
+bool expresieCorecta(string expresie)
+{
+	if (expresie.length() == 0)
+		return 0; // nu acceptam gol
+
+	// parantezare corecta
+	int paranteze = 0;
+	for (char c : expresie)
+	{
+		if (c == '(')
+			paranteze++;
+		if (c == ')')
+			paranteze--;
+		if (paranteze < 0)
+			return 0;
+	}
+	if (paranteze != 0)
+		return 0;
+
+	/**
+	expresii gresite:
+	( cu +*^/<>=#
+	+*^/<>=#scarel cu )
+	++ sau ** sau ## sau ^^
+
+	**/
+	int i, n;
+	i = 0;
+	n = expresie.length();
+
+	while (i < n - 1)
+	{
+		if (expresie[i] == '(' && strchr(operatiiBinare, expresie[i + 1]))
+			return 0;
+
+		if (strchr(operatii, expresie[i]) && expresie[i + 1] == ')')
+			return 0;
+
+		if (strchr(operatiiBinare, expresie[i]) && strchr(operatiiBinare, expresie[i + 1]))
+			return 0;
+
+		i++;
+	}
+
+	return 1;
+}
+
+// si asta am facut ca era acelasi cod de so multe ori si mna
+void proceseazaOperatie()
+{
+	if (operatori.empty() || operanzi.empty())
+		return; // sa fie safe
+
+	char op = operatori.top();
+	operatori.pop();
+	double x2 = operanzi.top();
+	operanzi.pop();
+	double x1 = 0;
+
+	if (strchr(operatiiBinare, op))
+	{
+		if (operanzi.empty())
+			return; // sa fie safe :))
+
+		x1 = operanzi.top();
+		operanzi.pop();
+	}
+
+	double val = 0;
+	// calculez
+	switch (op)
+	{
+	case '=':
+		val = egalitate(x1, x2);
+		break;
+	case '#':
+		val = !egalitate(x1, x2);
+		break;
+	case '<':
+		val = maiMic(x1, x2);
+		break;
+	case '>':
+		val = maiMare(x1, x2);
+		break;
+	case '+':
+		val = adunare(x1, x2);
+		break;
+	case '-':
+		val = scadere(x1, x2);
+		break;
+	case '*':
+		val = inmultire(x1, x2);
+		break;
+	case '/':
+		val = impartire(x1, x2);
+		break;
+	case '^':
+		val = putere(x1, x2);
+		break;
+	case 's':
+		val = sinus(x2);
+		break;
+	case 'c':
+		val = cosinus(x2);
+		break;
+	case 'l':
+		val = logaritm(x2);
+		break;
+	case 'e':
+		val = exponential(x2);
+		break;
+	case 'a':
+		val = modul(x2);
+		break;
+	case 'r':
+		val = radical(x2);
+		break;
+	case '~':
+		val = -x2;
+		break;
+	}
+	operanzi.push(val);
+}
+
+double valoareFunctie(functie E)
+{
+	// resetez stivele
+	while (!operanzi.empty())
+		operanzi.pop();
+
+	while (!operatori.empty())
+		operatori.pop();
+
+	bool waitForSign;
+	waitForSign = 1;
+
+	for (int i = 0; i < (int)E.v.size(); i++)
+	{
+		string token = E.v[i];
+		if (esteNumar(token))
+		{
+			operanzi.push(atof(token.c_str()));
+			waitForSign = 0;
+		}
+		else
+		{
+			if (token.length() == 1 && token[0] >= 'A' && token[0] <= 'Z')
+			{
+				operanzi.push(variabila[token[0] - 'A']);
+				waitForSign = 0;
+			}
+			else if (token == "q")
+			{
+				operanzi.push(PI);
+				waitForSign = 0;
+			}
+			else if (token == "(")
+			{
+				operatori.push('(');
+				waitForSign = 1;
+			}
+			else if (token == ")")
+			{
+				// procesez tot pana la '('
+				while (!operatori.empty() && operatori.top() != '(')
+					proceseazaOperatie();
+
+				if (!operatori.empty())
+					operatori.pop(); // pop la '('
+
+				waitForSign = 0;
+			}
+			else
+			{
+				char opCurent = token[0];
+
+				if (opCurent == '-' && waitForSign == true)
+					opCurent = '~';
+
+				// e un operator + - * etc, deci procesez cei cu prioritate mai mare primiiwhile (!operatori.empty() && operatori.top() != '(')
+				while (!operatori.empty() && operatori.top() != '(')
+				{
+					bool trebuieProcesat = false;
+
+					if (prioritate(opCurent) == 5)
+					{
+						if (prioritate(operatori.top()) > prioritate(opCurent))
+							trebuieProcesat = true;
+					}
+					else
+					{
+						if (prioritate(operatori.top()) >= prioritate(opCurent))
+							trebuieProcesat = true;
+					}
+
+					if (trebuieProcesat)
+						proceseazaOperatie();
+					else
+						break;
+				}
+
+				operatori.push(opCurent);
+
+				waitForSign = 1;
+			}
+		}
+	}
+	// dam clean up
+	while (!operatori.empty())
+		proceseazaOperatie();
+	if (!operanzi.empty())
+		return operanzi.top();
+
+	return 0;
+}
+
+functie buildFunction(string expresie)
+{
+	functie F;
+	string clean = "";
+	for (char c : expresie)
+		if (c != ' ')
+			clean += c;
+
+	F.expresie = clean;
+	F.valid = true;
+	int i = 0, n = clean.length();
+	bool areParanteze = (n > 0 && clean.front() == '(' && clean.back() == ')');
+
+	if (!areParanteze)
+		F.v.push_back("(");
+
+	while (i < n)
+	{
+		if (isdigit(clean[i]) || clean[i] == '.')
+		{
+			string nr = "";
+			while (i < n && (isdigit(clean[i]) || clean[i] == '.'))
+			{
+				nr += clean[i];
+				i++;
+			}
+			F.v.push_back(nr);
+		}
+		else
+		{
+			string s(1, clean[i]);
+			// check sa scot literele mici fara cele din operatiiUnare
+			if (strchr(operatii, clean[i]) || (clean[i] >= 'A' && clean[i] <= 'Z') || clean[i] == '(' || clean[i] == ')')
+				F.v.push_back(s);
+			i++;
+		}
+	}
+	if (!areParanteze)
+		F.v.push_back(")");
+	return F;
+}
+
+void evalueaza(string expresie, double& valoare)
+{
+	functie F = buildFunction(expresie);
+	valoare = valoareFunctie(F);
+}
+
+/////////////////////////////////////////////////////////////////////////////////////// front end
+
+// afisare consola
+void AdaugaLog(string text)
+{
+	outputConsole.push_back(text);
+	if (outputConsole.size() > 14)
+		outputConsole.erase(outputConsole.begin());
+
+	int p = getactivepage();
+	setactivepage(1 - getvisualpage());
+	DeseneazaInterfata();
+	setvisualpage(1 - getvisualpage());
+	setactivepage(p);
+}
+
+// pentru citire
+double GuiInput(char varName)
+{
+	string msg = "INTRODU ";
+	msg += varName;
+	msg += ": ";
+	AdaugaLog(msg);
+	string inputBuffer = "";
+	while (true)
+	{
+		if (kbhit())
+		{
+			char c = getch();
+			if (c == 13)
+			{
+				AdaugaLog(" > " + inputBuffer);
+				break;
+			}
+			else if (c == 8)
+			{
+				if (inputBuffer.length() > 0)
+					inputBuffer.pop_back();
+			}
+			else if ((c >= '0' && c <= '9') || c == '.' || c == '-')
+			{
+				inputBuffer += c;
+			}
+
+			if (!outputConsole.empty() && outputConsole.back().substr(0, 3) == " > ")
+				outputConsole.pop_back();
+			outputConsole.push_back(" > " + inputBuffer);
+
+			int p = getactivepage();
+			setactivepage(1 - getvisualpage());
+			DeseneazaInterfata();
+			setvisualpage(1 - getvisualpage());
+			setactivepage(p);
+			outputConsole.pop_back();
+		}
+	}
+	return inputBuffer.empty() ? 0 : atof(inputBuffer.c_str());
+}
+
+// executam program
+void ExecutaPasCuPas(blocLogic* B)
+{
+	if (B == nullptr)
+		return;
+	blocCurentExecutie = B->guiIndex;
+
+	int p = getactivepage();
+	setactivepage(1 - getvisualpage());
+	DeseneazaInterfata();
+	setvisualpage(1 - getvisualpage());
+	setactivepage(p);
+	delay(400);
+
+	if (B->tip == 0)
+	{ // STOP
+		AdaugaLog("[STOP]");
+		blocCurentExecutie = -1;
+		return;
+	}
+	else if (B->tip == 1)
+	{ // START
+		AdaugaLog("[START]");
+		ExecutaPasCuPas(B->urm);
+	}
+	else if (B->tip == 2)
+	{
+		B->valoare = GuiInput(B->var);
+		variabila[B->var - 'A'] = B->valoare;
+		ExecutaPasCuPas(B->urm);
+	}
+	else if (B->tip == 3)
+	{ // AFISARE
+		double val;
+		if (B->expresie.length() > 0)
+			evalueaza(B->expresie, val);
+		else
+		{
+			string tempVar(1, B->var);
+			evalueaza(tempVar, val);
+		}
+		char buffer[64];
+		sprintf_s(buffer, "OUT: %.2f", val);
+		AdaugaLog(buffer);
+		ExecutaPasCuPas(B->urm);
+	}
+	else if (B->tip == 4)
+	{ // ATRIBUIRE
+		evalueaza(B->expresie, variabila[B->var - 'A']);
+		B->valoare = variabila[B->var - 'A'];
+		char buffer[64];
+		sprintf_s(buffer, "%c <- %.2f", B->var, B->valoare);
+		AdaugaLog(buffer);
+		ExecutaPasCuPas(B->urm);
+	}
+	else if (B->tip == 5)
+	{ // DECIZIE
+		evalueaza(B->expresie, B->valoare);
+		if (B->valoare != 0)
+		{
+			AdaugaLog("TRUE");
+			ExecutaPasCuPas(B->urmA);
+		}
+		else
+		{
+			AdaugaLog("FALSE");
+			ExecutaPasCuPas(B->urmF);
+		}
+	}
+}
+
+// convertim program si apoi executam prin functia de deasupra
+void ConvertesteSiRuleaza()
+{
+	if (schema.empty())
+	{
+		AdaugaLog("SCHEMA GOALA!");
+		return;
+	}
+	outputConsole.clear();
+	AdaugaLog("Initializare...");
+
+	vector<blocLogic*> noduri(schema.size());
+	blocLogic* startNode = nullptr;
+
+	for (size_t i = 0; i < schema.size(); i++)
+	{
+		noduri[i] = new blocLogic;
+		noduri[i]->id = i;
+		noduri[i]->guiIndex = i;
+		noduri[i]->urm = noduri[i]->urmA = noduri[i]->urmF = nullptr;
+		string textRaw = schema[i].text;
+
+		if (schema[i].tip == TIP_ATRIBUIRE || schema[i].tip == TIP_DECIZIE || schema[i].tip == TIP_AFISARE)
+		{
+			string deVerificat = textRaw;
+
+			if (schema[i].tip == TIP_ATRIBUIRE)
+			{
+				size_t pos = textRaw.find('=');
+				if (pos != string::npos)
+					deVerificat = textRaw.substr(pos + 1);
+			}
+
+			if (!expresieCorecta(deVerificat))
+			{
+				char err[64];
+				sprintf_s(err, "ERR: Expresie gresita la blocul %d!", i);
+				AdaugaLog(err);
+				for (int j = 0; j <= (int)i; j++)
+					delete noduri[j];
+				return;
+			}
+		}
+		switch (schema[i].tip)
+		{
+		case TIP_START:
+			noduri[i]->tip = 1;
+			startNode = noduri[i];
+			break;
+		case TIP_STOP:
+			noduri[i]->tip = 0;
+			break;
+		case TIP_CITIRE:
+			noduri[i]->tip = 2;
+			if (textRaw.size() > 0)
+				noduri[i]->var = textRaw[0];
+			break;
+		case TIP_AFISARE:
+			noduri[i]->tip = 3;
+			if (textRaw.size() == 1 && isalpha(textRaw[0]))
+			{
+				noduri[i]->var = textRaw[0];
+				noduri[i]->expresie = textRaw;
+			}
+			else
+				noduri[i]->expresie = textRaw;
+			break;
+		case TIP_ATRIBUIRE:
+			noduri[i]->tip = 4;
+			{
+				size_t pos = textRaw.find('=');
+				if (pos != string::npos)
+				{
+					noduri[i]->var = textRaw[0];
+					noduri[i]->expresie = textRaw.substr(pos + 1);
+				}
+			}
+			break;
+		case TIP_DECIZIE:
+			noduri[i]->tip = 5;
+			noduri[i]->expresie = textRaw;
+			break;
+		}
+	}
+
+	if (!startNode)
+	{
+		AdaugaLog("LIPSA START!");
+		return;
+	}
+
+	for (const auto& leg : legaturi)
+	{
+		if (leg.sursaIdx >= (int)schema.size() || leg.destIdx >= (int)schema.size())
+			continue;
+		blocLogic* src = noduri[leg.sursaIdx];
+		blocLogic* dst = noduri[leg.destIdx];
+		if (src->tip == 5)
+		{
+			if (src->urmA == nullptr)
+				src->urmA = dst;
+			else
+				src->urmF = dst;
+		}
+		else
+		{
+			src->urm = dst;
+		}
+	}
+
+	memset(variabila, 0, sizeof(variabila));
+	ExecutaPasCuPas(startNode);
+	blocCurentExecutie = -1;
+	for (auto* n : noduri)
+		delete n;
+}
+
+// stergemblocul si legaturile
+void StergeBlocSiLegaturi(int indexDeSters)
+{
+	for (int i = legaturi.size() - 1; i >= 0; i--)
+	{
+		if (legaturi[i].sursaIdx == indexDeSters || legaturi[i].destIdx == indexDeSters)
+		{
+			legaturi.erase(legaturi.begin() + i);
+		}
+	}
+	schema.erase(schema.begin() + indexDeSters);
+	for (size_t i = 0; i < legaturi.size(); i++)
+	{
+		if (legaturi[i].sursaIdx > indexDeSters)
+			legaturi[i].sursaIdx--;
+		if (legaturi[i].destIdx > indexDeSters)
+			legaturi[i].destIdx--;
+	}
+}
+
+// desenam sagetile
+void DeseneazaSageata(int startX, int startY, int endX, int endY)
+{
+	setcolor(BLACK);
+	setlinestyle(SOLID_LINE, 0, 2);
+
+	int finalDestY = endY - 25;
+	int midY = (startY + finalDestY) / 2;
+
+	if (finalDestY < startY)
+	{
+		line(startX, startY, startX + 60, startY);
+		line(startX + 60, startY, startX + 60, finalDestY - 20);
+		line(startX + 60, finalDestY - 20, endX, finalDestY - 20);
+		line(endX, finalDestY - 20, endX, finalDestY);
+	}
+	else
+	{
+		line(startX, startY, startX, midY);
+		line(startX, midY, endX, midY);
+		line(endX, midY, endX, finalDestY);
+	}
+	line(endX, finalDestY, endX - 5, finalDestY - 10);
+	line(endX, finalDestY, endX + 5, finalDestY - 10);
+	line(endX - 5, finalDestY - 10, endX + 5, finalDestY - 10);
+}
+
+// hmmm desenam forma!?
+void DeseneazaForma(int x, int y, int tip, const char* textOverride = NULL, bool esteInMeniu = false, bool evidentiat = false, bool executie = false)
+{
+	if (executie)
+		setcolor(GREEN);
+	else if (evidentiat)
+		setcolor(BLUE);
+	else
+		setcolor(RED);
+
+	setlinestyle(SOLID_LINE, 0, 3);
+	int scale = esteInMeniu ? 0 : 10;
+
+	switch (tip)
+	{
+	case TIP_START:
+	case TIP_STOP:
+		ellipse(x, y, 0, 360, 40 + scale, 15 + scale / 2);
+		break;
+	case TIP_ATRIBUIRE:
+		rectangle(x - (40 + scale), y - (12 + scale / 2), x + (40 + scale), y + (12 + scale / 2));
+		break;
+	case TIP_CITIRE:
+		line(x - (30 + scale), y - (12 + scale / 2), x + (30 + scale), y - (12 + scale / 2));
+		line(x - (40 + scale), y + (12 + scale / 2), x + (40 + scale), y + (12 + scale / 2));
+		line(x - (30 + scale), y - (12 + scale / 2), x - (40 + scale), y + (12 + scale / 2));
+		line(x + (30 + scale), y - (12 + scale / 2), x + (40 + scale), y + (12 + scale / 2));
+		break;
+	case TIP_DECIZIE:
+		line(x, y - (17 + scale), x + (40 + scale), y);
+		line(x + (40 + scale), y, x, y + (17 + scale));
+		line(x, y + (17 + scale), x - (40 + scale), y);
+		line(x - (40 + scale), y, x, y - (17 + scale));
+		break;
+	case TIP_AFISARE:
+		line(x - (40 + scale), y - (12 + scale / 2), x + (40 + scale), y - (12 + scale / 2));
+		line(x - (30 + scale), y + (12 + scale / 2), x + (30 + scale), y + (12 + scale / 2));
+		line(x - (40 + scale), y - (12 + scale / 2), x - (30 + scale), y + (12 + scale / 2));
+		line(x + (40 + scale), y - (12 + scale / 2), x + (30 + scale), y + (12 + scale / 2));
+		break;
+	}
+
+	if (!esteInMeniu)
+	{
+		settextjustify(CENTER_TEXT, CENTER_TEXT);
+		setbkcolor(COLOR(230, 230, 220));
+		setcolor(BLACK);
+		if (textOverride != NULL && strlen(textOverride) > 0)
+		{
+			outtextxy(x, y, (char*)textOverride);
+		}
+		else
+		{
+			char label[20] = "";
+			switch (tip)
+			{
+			case TIP_START:
+				strcpy_s(label, "START");
+				break;
+			case TIP_ATRIBUIRE:
+				strcpy_s(label, "X=...");
+				break;
+			case TIP_CITIRE:
+				strcpy_s(label, "CITIRE");
+				break;
+			case TIP_DECIZIE:
+				strcpy_s(label, "?");
+				break;
+			case TIP_AFISARE:
+				strcpy_s(label, "SCRIE");
+				break;
+			case TIP_STOP:
+				strcpy_s(label, "STOP");
+				break;
+			}
+			outtextxy(x, y, label);
+		}
+		settextjustify(LEFT_TEXT, TOP_TEXT);
+	}
+}
+
+// desenam interfata wowowo
+void DeseneazaInterfata()
+{
+	setbkcolor(COLOR(230, 230, 220));
+	cleardevice();
+
+	for (size_t i = 0; i < legaturi.size(); i++)
+	{
+		if (legaturi[i].sursaIdx < (int)schema.size() && legaturi[i].destIdx < (int)schema.size())
+		{
+			Bloc& src = schema[legaturi[i].sursaIdx];
+			Bloc& dst = schema[legaturi[i].destIdx];
+
+			int sx, sy;
+
+			if (src.tip == TIP_DECIZIE)
+			{
+				int nrLegaturiAnterioare = 0;
+				for (int j = 0; j < (int)i; j++)
+				{
+					if (legaturi[j].sursaIdx == legaturi[i].sursaIdx)
+					{
+						nrLegaturiAnterioare++;
+					}
+				}
+
+				if (nrLegaturiAnterioare == 0)
+				{
+					sx = src.x - 50;
+					sy = src.y;
+				}
+				else
+				{
+					sx = src.x + 50;
+					sy = src.y;
+				}
+			}
+			else
+			{
+				sx = src.x;
+				sy = src.y + 25;
+			}
+
+			DeseneazaSageata(sx, sy, dst.x, dst.y);
+
+			if (src.tip == TIP_DECIZIE)
+			{
+				setbkcolor(COLOR(230, 230, 220));
+				setcolor(BLACK);
+				settextstyle(SANS_SERIF_FONT, HORIZ_DIR, 1);
+				int nrLegaturiAnterioare = 0;
+				for (int j = 0; j < (int)i; j++)
+					if (legaturi[j].sursaIdx == legaturi[i].sursaIdx)
+						nrLegaturiAnterioare++;
+				if (nrLegaturiAnterioare == 0)
+					outtextxy(src.x - 60, src.y - 10, "T");
+				else
+					outtextxy(src.x + 60, src.y - 10, "F");
+			}
+		}
+	}
+
+	// desenare meniu stanga
+	settextstyle(SANS_SERIF_FONT, HORIZ_DIR, 2);
+	setfillstyle(SOLID_FILL, RED);
+	bar(0, 0, 300, 190);
+	setcolor(COLOR(50, 50, 50));
+	setlinestyle(SOLID_LINE, 0, 10);
+	rectangle(0, 0, 300, 190);
+
+	setcolor(COLOR(230, 230, 220));
+	setbkcolor(RED);
+	outtextxy(10, 10, "FOLDER SCHEME");
+	setcolor(COLOR(50, 50, 50));
+	line(0, 40, 300, 40);
+	setcolor(COLOR(230, 230, 220));
+	outtextxy(10, 50, "SALVARE SCHEMA");
+	setcolor(COLOR(50, 50, 50));
+	line(0, 90, 300, 90);
+	setcolor(COLOR(230, 230, 220));
+	outtextxy(10, 100, "SCHEMA NOUA");
+	setcolor(COLOR(50, 50, 50));
+	line(0, 140, 300, 140);
+	setcolor(COLOR(230, 230, 220));
+	outtextxy(10, 150, "INTRODUCE BLOC");
+	setcolor(COLOR(50, 50, 50));
+	line(0, 190, 300, 190);
+	line(250, 165, 280, 165);
+	line(265, 150, 265, 180);
+
+	// desenare panouri dreapta
+	setfillstyle(SOLID_FILL, RED);
+	bar(1000, 0, 1490, 370);
+	setcolor(COLOR(50, 50, 50));
+	rectangle(1000, 0, 1490, 370);
+	rectangle(1000, 0, 1250, 50);
+	setcolor(COLOR(230, 230, 220));
+	setbkcolor(RED);
+	outtextxy(1015, 12, "EXECUTA COD");
+
+	// desenare consola
+	setfillstyle(SOLID_FILL, BLACK);
+	bar(1005, 55, 1485, 365);
+	setcolor(GREEN);
+	setbkcolor(BLACK);
+	settextstyle(COMPLEX_FONT, HORIZ_DIR, 1);
+	int consoleY = 60;
+	for (const string& linie : outputConsole)
+	{
+		outtextxy(1010, consoleY, (char*)linie.c_str());
+		consoleY += 20;
+	}
+
+	setfillstyle(SOLID_FILL, RED);
+	bar(1000, 380, 1490, 750);
+	setcolor(COLOR(50, 50, 50));
+	rectangle(1000, 380, 1490, 750);
+	rectangle(1000, 380, 1310, 430);
+	setcolor(COLOR(230, 230, 220));
+	setbkcolor(RED);
+	settextstyle(SANS_SERIF_FONT, HORIZ_DIR, 2);
+	outtextxy(1015, 392, "CODIFICARE IN C++");
+
+	setfillstyle(SOLID_FILL, BLACK);
+	bar(1005, 435, 1485, 745);
+	setcolor(GREEN);
+	setbkcolor(BLACK);
+	settextstyle(COMPLEX_FONT, HORIZ_DIR, 1);
+	int cppY = 440;
+	for (size_t i = scrollPosCod; i < cppCodeLines.size(); i++) //asta e ca sa putem da scroll
+	{
+		if (cppY < 730)
+		{
+			outtextxy(1010, cppY, (char*)cppCodeLines[i].c_str());
+			cppY += 20;
+		}
+	}
+
+	if (esteMeniulDeschis)
+	{
+		setfillstyle(SOLID_FILL, RED);
+		bar(0, 195, 300, 565);
+		setcolor(COLOR(50, 50, 50));
+		setlinestyle(SOLID_LINE, 0, 10);
+		rectangle(0, 195, 300, 565);
+		setbkcolor(RED);
+		int yStart = 205;
+		int hItem = 60;
+		setlinestyle(SOLID_LINE, 0, 3);
+		char labels[6][15] = { "START", "ATRIBUIRE", "CITIRE", "DECIZIE", "AFISARE", "STOP" };
+		for (int i = 0; i < 6; i++)
+		{
+			setcolor(COLOR(230, 230, 220));
+			outtextxy(10, yStart + i * hItem, labels[i]);
+			DeseneazaForma(240, yStart + i * hItem + 12, i, NULL, true);
+			if (i < 5)
+			{
+				setcolor(COLOR(50, 50, 50));
+				line(0, yStart + i * hItem + 35, 300, yStart + i * hItem + 35);
+			}
+		}
+	}
+
+	settextstyle(SANS_SERIF_FONT, HORIZ_DIR, 1);
+	for (size_t i = 0; i < schema.size(); i++)
+	{
+		bool eSursa = (i == indexSursaLegatura);
+		bool eExec = (i == blocCurentExecutie);
+		DeseneazaForma(schema[i].x, schema[i].y, schema[i].tip, schema[i].text, false, eSursa, eExec);
+	}
+
+	if (indexSursaLegatura != -1 && indexSursaLegatura < (int)schema.size())
+	{
+		Bloc b = schema[indexSursaLegatura];
+		int bx = b.x + 45;
+		int by = b.y - 45;
+		int marime = 20;
+		setcolor(RED);
+		setfillstyle(SOLID_FILL, RED);
+		bar(bx, by, bx + marime, by + marime);
+		setcolor(WHITE);
+		setlinestyle(SOLID_LINE, 0, 2);
+		line(bx + 3, by + 3, bx + marime - 3, by + marime - 3);
+		line(bx + marime - 3, by + 3, bx + 3, by + marime - 3);
+		if (b.tip == TIP_ATRIBUIRE || b.tip == TIP_CITIRE || b.tip == TIP_DECIZIE || b.tip == TIP_AFISARE)
+		{
+			int ex = b.x - 65;
+			int ey = b.y - 45;
+			setcolor(COLOR(255, 200, 0));
+			setfillstyle(SOLID_FILL, COLOR(255, 200, 0));
+			bar(ex, ey, ex + marime, ey + marime);
+			setcolor(BLACK);
+			setbkcolor(COLOR(255, 200, 0));
+			settextstyle(SANS_SERIF_FONT, HORIZ_DIR, 1);
+			outtextxy(ex + 6, ey + 2, "E");
+		}
+	}
+}
+
+// efectiv editam bloc
+void EditeazaTextBloc(int idx)
+{
+	while (kbhit())
+		getch();
+	char buffer[50];
+	strcpy_s(buffer, schema[idx].text);
+	int len = strlen(buffer);
+
+	while (1)
+	{
+		strcpy_s(schema[idx].text, buffer);
+		setactivepage(1 - getvisualpage());
+		DeseneazaInterfata();
+		setcolor(BLACK);
+		setbkcolor(COLOR(230, 230, 220));
+		outtextxy(schema[idx].x + textwidth(buffer) / 2 + 5, schema[idx].y - 5, "_");
+		setvisualpage(1 - getvisualpage());
+
+		char c = getch();
+		if (c == 13)
+			break;
+		if (c == 8)
+		{
+			if (len > 0)
+			{
+				buffer[len - 1] = '\0';
+				len--;
+			}
+		}
+		else if (len < 49 && c >= 32 && c <= 126)
+		{
+			buffer[len] = c;
+			buffer[len + 1] = '\0';
+			len++;
+		}
+	}
+}
+
+// efectiv adaugam bloc
+void AdaugaBloc(int tip)
+{
+	Bloc b;
+	b.tip = tip;
+	b.x = 650;
+	b.y = 375;
+	b.text[0] = '\0';
+	schema.push_back(b);
+}
+
+// functia verifica pe care bloc dau click
+int ObtineIndexBlocLaMouse(int mx, int my)
+{
+	for (int i = schema.size() - 1; i >= 0; i--)
+	{
+		if (mx >= schema[i].x - 50 && mx <= schema[i].x + 50 &&
+			my >= schema[i].y - 30 && my <= schema[i].y + 30)
+		{
+			return i;
+		}
+	}
+	return -1;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////////// incercare de convertire in cod c++ :((
+void scrieCodRecursiv(blocLogic* B, string& prog, int indent)
+{
+	if (B == nullptr) return;
+
+	string spatii = "";
+	for (int k = 0; k < indent; k++)
+		spatii += "   ";
+
+	if (B->tip == 0) // STOP
+	{
+		//pt denis: am sters de aici ce aveai ca imi dadea return 0 si in if uri si elseuri si mna
+		return;
+	}
+	else if (B->tip == 1) // START
+	{
+		scrieCodRecursiv(B->urm, prog, indent);
+	}
+	else if (B->tip == 2) // CITIRE
+	{
+		prog += spatii + "cin >> " + B->var + ";\n";
+		scrieCodRecursiv(B->urm, prog, indent);
+	}
+	else if (B->tip == 3) // AFISARE
+	{
+		if (B->expresie.length() > 0)
+			prog += spatii + "cout << " + B->expresie + " << endl;\n";
+		else
+		{
+			string s(1, B->var);
+			prog += spatii + "cout << " + s + " << endl;\n";
+		}
+		scrieCodRecursiv(B->urm, prog, indent);
+	}
+	else if (B->tip == 4) // ATRIBUIRE
+	{
+		string s(1, B->var);
+		prog += spatii + s + " = " + B->expresie + ";\n";
+		scrieCodRecursiv(B->urm, prog, indent);
+	}
+	else if (B->tip == 5) // DECIZIE
+	{
+		prog += spatii + "if (" + B->expresie + ")\n";
+		prog += spatii + "{\n";
+
+		scrieCodRecursiv(B->urmA, prog, indent + 1);
+
+		prog += spatii + "}\n";
+		prog += spatii + "else\n";
+		prog += spatii + "{\n";
+
+		scrieCodRecursiv(B->urmF, prog, indent + 1);
+
+		prog += spatii + "}\n";
+	}
+}
+
+void convertInCode()
+{
+	if (schema.empty())
+	{
+		AdaugaLog("SCHEMA GOALA! Nu pot genera cod.");
+		return;
+	}
+
+	vector<blocLogic*> noduri(schema.size());
+	blocLogic* startNode = nullptr;
+
+	for (size_t i = 0; i < schema.size(); i++)
+	{
+		noduri[i] = new blocLogic;
+		noduri[i]->id = i;
+		noduri[i]->guiIndex = i;
+		noduri[i]->urm = noduri[i]->urmA = noduri[i]->urmF = nullptr;
+		string textRaw = schema[i].text;
+
+		switch (schema[i].tip)
+		{
+		case TIP_START:
+			noduri[i]->tip = 1;
+			startNode = noduri[i];
+			break;
+		case TIP_STOP:
+			noduri[i]->tip = 0;
+			break;
+		case TIP_CITIRE:
+			noduri[i]->tip = 2;
+			if (textRaw.length() > 0) noduri[i]->var = textRaw[0];
+			break;
+		case TIP_AFISARE:
+			noduri[i]->tip = 3;
+			noduri[i]->expresie = textRaw;
+			break;
+		case TIP_ATRIBUIRE:
+			noduri[i]->tip = 4;
+			{
+				size_t pos = textRaw.find('=');
+				if (pos != string::npos) {
+					noduri[i]->var = textRaw[0];
+					noduri[i]->expresie = textRaw.substr(pos + 1);
+				}
+			}
+			break;
+		case TIP_DECIZIE:
+			noduri[i]->tip = 5;
+			noduri[i]->expresie = textRaw;
+			break;
+		}
+	}
+
+	for (const auto& leg : legaturi)
+	{
+		if (leg.sursaIdx >= schema.size() || leg.destIdx >= schema.size())
+			continue;
+
+		blocLogic* src = noduri[leg.sursaIdx];
+		blocLogic* dst = noduri[leg.destIdx];
+
+		if (src->tip == 5)
+		{
+			if (src->urmA == nullptr)
+				src->urmA = dst;
+			else
+				src->urmF = dst;
+		}
+		else
+			src->urm = dst;
+	}
+
+	if (!startNode)
+	{
+		AdaugaLog("LIPSA START! Nu pot genera.");
+		return;
+	}
+
+	string program = "";
+	program += "#include <iostream>\n#include <cmath>\nusing namespace std;\n\nint main() {\n";
+
+	//ce e mai jos am bagat ca imi apareau toate variabilele in cod asa ca am facut sa apara doar variabilele pe care le folosim
+	bool usedVar[26] = { false };
+	for (auto* n : noduri)
+	{
+		if (n->var >= 'A' && n->var <= 'Z') usedVar[n->var - 'A'] = true;
+		for (char c : n->expresie)
+			if (c >= 'A' && c <= 'Z') usedVar[c - 'A'] = true;
+	}
+
+	bool existsAny = false;
+	for (int i = 0; i < 26; i++) if (usedVar[i]) existsAny = true;
+
+	if (existsAny)
+	{
+		program += "   double ";
+		bool first = true;
+		for (int i = 0; i < 26; i++) {
+			if (usedVar[i]) {
+				if (!first) program += ", ";
+				program += (char)('A' + i);
+				first = false;
+			}
+		}
+		program += ";\n";
+	}
+
+	scrieCodRecursiv(startNode, program, 1);
+	program += "   return 0;\n}\n";
+
+	cppCodeLines.clear();
+	scrollPosCod = 0; // ca sa resetam scrollul cum ar veni cand apasam pe codificare cod sa ne intoarcem sus
+	stringstream ss(program);
+	string line;
+	//asta e ca sa avem o lista de linii 
+	while (getline(ss, line, '\n')) {
+		cppCodeLines.push_back(line);
+	}
+
+	AdaugaLog("Codul C++ a fost generat!");
+
+	for (auto* n : noduri)
+		delete n;
+}
+
+int main()
+{
+	initwindow(1500, 750, "TABLA");
+
+	int paginaActiva = 0;
+	bool trebuieDesenat = true;
+	int oldMx = -1, oldMy = -1;
+
+	while (1)
+	{
+		if (ismouseclick(WM_LBUTTONUP))
+			clearmouseclick(WM_LBUTTONUP);
+		if (ismouseclick(WM_RBUTTONUP))
+			clearmouseclick(WM_RBUTTONUP);
+		if (ismouseclick(WM_MOUSEMOVE))
+			clearmouseclick(WM_MOUSEMOVE);
+
+		if (GetAsyncKeyState(VK_UP) & 0x8000) { // ca sa stim daca dam scroll in sus
+			if (scrollPosCod > 0) {
+				scrollPosCod--;
+				trebuieDesenat = true;
+				delay(60);
+			}
+		}
+		if (GetAsyncKeyState(VK_DOWN) & 0x8000) {
+			if (scrollPosCod < (int)cppCodeLines.size() - 1) { // sau ca sa stim daca dam scroll in jos
+				scrollPosCod++;
+				trebuieDesenat = true;
+				delay(60);
+			}
+		}
+
+		if (mousex() != oldMx || mousey() != oldMy)
+		{
+			if (indexBlocSelectat != -1)
+				trebuieDesenat = true;
+			oldMx = mousex();
+			oldMy = mousey();
+		}
+
+		if (ismouseclick(WM_LBUTTONDOWN))
+		{
+			int mx, my;
+			getmouseclick(WM_LBUTTONDOWN, mx, my);
+			bool actiuneFacuta = false;
+
+			if (mx >= 1000 && mx <= 1250 && my >= 0 && my <= 50)
+			{
+				ConvertesteSiRuleaza();
+				trebuieDesenat = true;
+				actiuneFacuta = true;
+			}
+
+			if (!actiuneFacuta && mx >= 1000 && mx <= 1310 && my >= 380 && my <= 430)
+			{
+				convertInCode();
+				trebuieDesenat = true;
+				actiuneFacuta = true;
+			}
+
+			if (!actiuneFacuta && indexSursaLegatura != -1 && indexSursaLegatura < (int)schema.size())
+			{
+				Bloc b = schema[indexSursaLegatura];
+				int bx = b.x + 45;
+				int by = b.y - 45;
+				if (mx >= bx && mx <= bx + 20 && my >= by && my <= by + 20)
+				{
+					StergeBlocSiLegaturi(indexSursaLegatura);
+					indexSursaLegatura = -1;
+					trebuieDesenat = true;
+					actiuneFacuta = true;
+				}
+				int ex = b.x - 65;
+				int ey = b.y - 45;
+				if (!actiuneFacuta && (b.tip == TIP_ATRIBUIRE || b.tip == TIP_CITIRE || b.tip == TIP_DECIZIE || b.tip == TIP_AFISARE))
+				{
+					if (mx >= ex && mx <= ex + 20 && my >= ey && my <= ey + 20)
+					{
+						EditeazaTextBloc(indexSursaLegatura);
+						trebuieDesenat = true;
+						actiuneFacuta = true;
+					}
+				}
+			}
+
+			if (!actiuneFacuta)
+			{
+				if (mx >= 0 && mx <= 300 && my >= 142 && my <= 190)
+				{
+					esteMeniulDeschis = !esteMeniulDeschis;
+					trebuieDesenat = true;
+				}
+				else if (esteMeniulDeschis && mx >= 0 && mx <= 300 && my > 195 && my < 565)
+				{
+					int idx = (my - 205) / 60;
+					if (idx >= 0 && idx <= 5)
+					{
+						AdaugaBloc(idx);
+						trebuieDesenat = true;
+					}
+				}
+				else if (mx > 300 && mx < 1000)
+				{
+					int idx = ObtineIndexBlocLaMouse(mx, my);
+					if (idx != -1)
+					{
+						indexBlocSelectat = idx;
+						offsetX = schema[idx].x - mx;
+						offsetY = schema[idx].y - my;
+						if (indexSursaLegatura != idx)
+							indexSursaLegatura = -1;
+						trebuieDesenat = true;
+					}
+					else
+					{
+						indexSursaLegatura = -1;
+						trebuieDesenat = true;
+					}
+				}
+			}
+		}
+
+		if (ismouseclick(WM_RBUTTONDOWN))
+		{
+			int mx, my;
+			getmouseclick(WM_RBUTTONDOWN, mx, my);
+			int idx = ObtineIndexBlocLaMouse(mx, my);
+
+			if (idx != -1)
+			{
+				if (indexSursaLegatura == -1)
+				{
+					if (schema[idx].tip != TIP_STOP)
+					{
+						if (schema[idx].tip == TIP_START)
+						{
+							bool areDejaLegatura = false;
+							for (const auto& l : legaturi)
+							{
+								if (l.sursaIdx == idx)
+								{
+									areDejaLegatura = true;
+									break;
+								}
+							}
+							if (!areDejaLegatura)
+							{
+								indexSursaLegatura = idx;
+								trebuieDesenat = true;
+							}
+						}
+						else
+						{
+							indexSursaLegatura = idx;
+							trebuieDesenat = true;
+						}
+					}
+				}
+				else if (indexSursaLegatura != idx)
+				{
+					if (schema[idx].tip != TIP_START)
+					{
+						Legatura l;
+						l.sursaIdx = indexSursaLegatura;
+						l.destIdx = idx;
+						legaturi.push_back(l);
+						indexSursaLegatura = -1;
+						trebuieDesenat = true;
+					}
+					else
+					{
+						indexSursaLegatura = -1;
+						trebuieDesenat = true;
+					}
+				}
+				else
+				{
+					indexSursaLegatura = -1;
+					trebuieDesenat = true;
+				}
+			}
+			else
+			{
+				indexSursaLegatura = -1;
+				trebuieDesenat = true;
+			}
+		}
+
+		if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) && indexBlocSelectat != -1)
+		{
+			int mx = mousex();
+			int my = mousey();
+			int newX = mx + offsetX;
+			int newY = my + offsetY;
+			if (newX < 350) newX = 350;
+			if (newX > 950) newX = 950;
+			if (newY < 25) newY = 25;
+			if (newY > 725) newY = 725;
+
+			if (schema[indexBlocSelectat].x != newX || schema[indexBlocSelectat].y != newY)
+			{
+				schema[indexBlocSelectat].x = newX;
+				schema[indexBlocSelectat].y = newY;
+				trebuieDesenat = true;
+			}
+		}
+		else
+		{
+			indexBlocSelectat = -1;
+		}
+
+		if (trebuieDesenat)
+		{
+			setactivepage(paginaActiva);
+			DeseneazaInterfata();
+			setvisualpage(paginaActiva);
+			paginaActiva = 1 - paginaActiva;
+			trebuieDesenat = false;
+		}
+	}
+
+	getch();
+	closegraph(ALL_WINDOWS);
+	return 0;
+}
